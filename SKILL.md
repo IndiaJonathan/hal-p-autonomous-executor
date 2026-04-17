@@ -296,6 +296,16 @@ Before starting an overnight build:
 
 ---
 
+## Overnight Run Recipe
+
+How we ran the Poem of the Day overnight build — and how to repeat it.
+See **docs/overnight-run-recipe.md** for:
+- Step-by-step repeatability guide
+- LaunchAgent configs (10-min GSD cron, 2 AM QA oracle)
+- Key tuned parameters (lock timeout: 600s, not 1800s)
+- Common issues + fixes from the postmortem
+- Quick reference for existing LaunchAgents
+
 ## QA Delivery Annex
 
 Every project built by the autonomous executor can include an **automated QA gate** that runs after each build cycle, files Plane tickets automatically, and sends Discord summaries.

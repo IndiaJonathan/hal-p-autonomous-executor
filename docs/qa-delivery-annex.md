@@ -343,3 +343,117 @@ Generated automatically by extending `setup.sh` with `--with-qa` flag.
 | GalacticIdle | `~/.openclaw/workspace/scripts/galactic_idle_bug_hunter.py` | Active (cron) |
 
 Reference these for working examples before building a new QA script.
+---
+
+## Android QA — Debugging Playbook
+
+Hard-won lessons from running QA on Android/React Native apps.
+
+### uiautomator2 input tap — use shell input instead of uiautomator2's tap()
+
+**Problem:** `uiautomator2` Python `tap()` sends synthetic touch events that React Native's native touch layer doesn't receive. Buttons visually highlight but don't fire.
+
+**Fix:** Use `adb shell input tap X Y` instead:
+
+```python
+def tap(x, y, device=None):
+    dev = f"-s {device}" if device else ""
+    subprocess.run(
+        f"adb {dev} shell input tap {x} {y}",
+        shell=True, check=False
+    )
+```
+
+This sends the actual Android system `input` event which RN receives correctly.
+
+### Monkey runner — don't use -s (seed)
+
+**Problem:** `monkey -s <seed>` can trigger crashes on some devices because it replays the same event sequence exactly, which may hit race conditions.
+
+**Fix:** Use plain `monkey -p <package> -v 1` for one random event — enough to wake the app — without a seed.
+
+### Crash detection — use dumpsys, not process list
+
+**Wrong:** Check if process is running via `ps` or `pidof`.
+**Right:** Use `dumpsys package` which has the actual lifecycle state:
+
+```python
+def is_app_running(package):
+    r = subprocess.run(
+        f"adb shell dumpsys package {package}",
+        capture_output=True, text=True, check=False
+    )
+    return "stopped" not in r.stdout.lower()
+```
+
+Also watch for: `dumpstate` crashes, ANR traces in `/data/anr/`.
+
+### Network stats — know when app is truly offline
+
+```python
+def get_network_type():
+    r = subprocess.run(
+        "adb shell dumpsys connectivity | grep 'type=mobile' -A2",
+        shell=True, capture_output=True, text=True
+    )
+    return "CONNECTED" if r.returncode == 0 and r.stdout else "offline"
+```
+
+A zero-time network stat means not connected at all, not just airplane mode.
+
+### UI hierarchy dump — essential diagnostic
+
+```bash
+# Dump to device then pull
+adb shell uiautomator dump /sdcard/ui.xml
+adb pull /sdcard/ui.xml /tmp/ui.xml
+
+# Or pipe directly (may not work on all Android versions)
+adb shell uiautomator dump /sdcard/ui.xml && adb pull /sdcard/ui.xml
+```
+
+Best practice: always dump to `/sdcard/` first, then pull. Direct pipe can silently fail.
+
+### Emulator startup — wait for boot complete
+
+```python
+def wait_for_emulator_ready(timeout=60):
+    start = time.time()
+    while time.time() - start < timeout:
+        r = subprocess.run(
+            "adb shell getprop sys.boot_completed",
+            capture_output=True, text=True
+        )
+        if r.stdout.strip() == "1":
+            return True
+        time.sleep(2)
+    return False
+```
+
+Don't try to interact with the emulator until `sys.boot_completed == 1`. Swipe/tap before boot completes causes it to freeze.
+
+### Auth flow — test in-app, not just API
+
+**Critical:** API-only testing is insufficient. Sign up / sign in flows must be tested in the real UI because:
+- In-app form validation may differ from API validation
+- Token storage/session management happens at the app layer
+- Magic link deep-links require the app to be installed and configured
+
+Always follow: API test (fast feedback) + UI test (real experience) for auth.
+
+### Onboarding taps — swipe works when tap doesn't
+
+**Observation:** On React Native onboarding screens, `input tap` can fail silently while swipe gestures work reliably. Root cause appears to be timing — elements may exist but not yet fully mounted/responsive when tap fires.
+
+**Fix:** Use swipe for onboarding progression:
+```python
+def swipe_left(dev=None):
+    d = f"-s {dev}" if dev else ""
+    subprocess.run(f"adb {d} shell input swipe 900 500 100 500", shell=True)
+```
+
+### LaunchAgents vs cron on macOS — LaunchAgent preferred
+
+LaunchAgents survive logout, survive sleep/wake cycles, and log to a file you control. `crontab` entries can silently fail to fire if the system was asleep at the scheduled time.
+
+Use `StartCalendarInterval` for time-based scheduling, not `StartInterval` (which only fires when already loaded).

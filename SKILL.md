@@ -312,6 +312,7 @@ Every project built by the autonomous executor can include an **automated QA gat
 
 See **docs/qa-delivery-annex.md** for:
 - QA architecture and check catalog
+- **Android QA Debugging Playbook** — shell `input tap` vs uiautomator2, dumpsys crash detection, monkey seed avoidance, boot-complete wait, swipe-vs-tap for RN onboarding
 - Plane ticket pattern for bug filing
 - QA script templates (Python + shell orchestrator)
 - Nightly QA oracle setup guide

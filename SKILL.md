@@ -282,6 +282,8 @@ Before starting an overnight build:
 - [ ] Docker compose works: `docker compose up -d`
 - [ ] Cron created with `setup.sh` or `openclaw cron create`
 - [ ] Token budget unconstrained: "go nuts, I want a product by morning"
+- [ ] QA agent LaunchAgent installed (`com.burk.{project}-qa-agent.plist`, every 30 min) — if `--with-qa` was used
+- [ ] Plane project ID configured in executor task (`PLANE_PROJECT_ID` variable) — if QA loop is desired
 
 ---
 
@@ -313,10 +315,12 @@ Every project built by the autonomous executor can include an **automated QA gat
 See **docs/qa-delivery-annex.md** for:
 - QA architecture and check catalog
 - **Android QA Debugging Playbook** — shell `input tap` vs uiautomator2, dumpsys crash detection, monkey seed avoidance, boot-complete wait, swipe-vs-tap for RN onboarding
+- **Periodic QA agent** — every 30 min spawn script + LaunchAgent setup; files Plane tickets on failures
+- **Plane ticket → Executor loop** — executor pulls new QA tickets each cycle, injects into STATE.md, executes fix, marks resolved, DMs Discord on fix
 - Plane ticket pattern for bug filing
 - QA script templates (Python + shell orchestrator)
 - Nightly QA oracle setup guide
-- Discord QA summary format
+- Discord QA summary format (failures only — no noise on clean runs)
 
 ## Mobile App Annex
 

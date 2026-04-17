@@ -408,6 +408,56 @@ PLIST_EOF
   echo "✓ LaunchAgent: $PLIST_PATH (runs 2 AM CT daily)"
 fi
 
+# ---- STEP 9: 30-min QA agent (periodic bug finder) ----
+cat >> "$PROJECT_DIR/scripts/qa/spawn-qa-agent.sh" << 'QAAGENTEOF'
+#!/bin/bash
+set -euo pipefail
+PROJECT="{project}"
+QA_SCRIPT="$SCRIPTS_DIR/qa_runner.py"
+LOG_FILE="$REPORTS_DIR/{project}-qa-agent.log"
+STATUS_FILE="/Users/jonathan/.openclaw/workspace/mahoodles-dashboard/data/{project}-qa-agent-status.json"
+LOCK_FILE="$REPORTS_DIR/{project}-qa-agent.lock"
+LOCK_TIMEOUT=1200
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
+
+acquire_lock() {
+  [ -f "$LOCK_FILE" ] && [ $(($(date +%s) - $(stat -f%Sm -t%s "$LOCK_FILE" 2>/dev/null || echo 0))) -lt "$LOCK_TIMEOUT" ] && return 1
+  echo "$(date +%s)" > "$LOCK_FILE"
+}
+
+acquire_lock || { log "SKIP: QA agent still running"; exit 0; }
+log "QA agent firing"
+python3 "$QA_SCRIPT" >> "$LOG_FILE" 2>&1 || true
+log "QA agent done"
+QAAGENTEOF
+chmod +x "$PROJECT_DIR/scripts/qa/spawn-qa-agent.sh"
+echo "✓ 30-min QA agent script created"
+
+# Install 30-min QA agent LaunchAgent
+QA_AGENT_PLIST="$HOME/Library/LaunchAgents/com.burk.$PROJECT-qa-agent.plist"
+cat > "$QA_AGENT_PLIST" << QA_PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.burk.$PROJECT-qa-agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$PROJECT_DIR/scripts/qa/spawn-qa-agent.sh</string>
+  </array>
+  <key>StartInterval</key><integer>1800</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$REPORTS_DIR/{project}-qa-agent.log</string>
+  <key>StandardErrorPath</key><string>$REPORTS_DIR/{project}-qa-agent.log</string>
+</dict>
+</plist>
+QA_PLIST_EOF
+launchctl load "$QA_AGENT_PLIST" 2>/dev/null || true
+echo "✓ 30-min QA agent LaunchAgent: $QA_AGENT_PLIST"
+echo "  (fires every 30 min — files Plane tickets, no Discord noise on clean runs)"
+
 # ---- SUMMARY ----
 echo ""
 echo "═══════════════════════════════════════════════"

@@ -457,3 +457,188 @@ def swipe_left(dev=None):
 LaunchAgents survive logout, survive sleep/wake cycles, and log to a file you control. `crontab` entries can silently fail to fire if the system was asleep at the scheduled time.
 
 Use `StartCalendarInterval` for time-based scheduling, not `StartInterval` (which only fires when already loaded).
+
+---
+
+## Periodic QA Agent — Every 30 Minutes
+
+When a project is ready for active QA (post-build, or mid-development with a stable APK), set up a periodic QA agent that:
+1. Runs every 30 minutes
+2. Spawns a QA session that does full app + API checks
+3. Files Plane tickets for any failures
+4. Reports to Discord only on failures
+
+### Spawn Script — spawn-qa-agent.sh
+
+```bash
+#!/bin/bash
+# Spawns a periodic QA agent for a project
+# Run via LaunchAgent every 30 min (StartInterval: 1800)
+
+PROJECT="${1:?Usage: $0 <project> <qa_script> <api_base>}"
+QA_SCRIPT="${2}"
+API_BASE="${3}"
+LOG_FILE="/Users/jonathan/.openclaw/workspace/reports/${PROJECT}-qa-agent.log"
+STATUS_FILE="/Users/jonathan/.openclaw/workspace/mahoodles-dashboard/data/${PROJECT}-qa-agent-status.json"
+LOCK_FILE="/Users/jonathan/.openclaw/workspace/reports/${PROJECT}-qa-agent.lock"
+LOCK_TIMEOUT=1200  # 20 min — QA should complete in <10min
+
+acquire_lock() {
+  [ -f "$LOCK_FILE" ] && [ $(($(date +%s) - $(stat -f%Sm -t%s "$LOCK_FILE" 2>/dev/null || echo 0))) -lt "$LOCK_TIMEOUT" ] && return 1
+  echo "$(date +%s)" > "$LOCK_FILE"; return 0
+}
+
+acquire_lock || { echo "SKIP: QA agent still running"; exit 0; }
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
+log "QA agent firing for $PROJECT"
+
+# Run QA script
+python3 "$QA_SCRIPT" >> "$LOG_FILE" 2>&1
+QA_RC=$?
+
+# Update status file
+python3 -c "
+import json
+data = {'last_run': '$(date -I)', 'rc': $QA_RC, 'project': '$PROJECT'}
+with open('$STATUS_FILE', 'w') as f: json.dump(data, f)
+"
+
+if [ $QA_RC -ne 0 ]; then
+  log "QA FAILED — tickets filed, Discord alert sent"
+  # Discord DM with failure summary (only on failure — no noise on success)
+fi
+
+log "QA agent done (rc=$QA_RC)"
+```
+
+### LaunchAgent Setup — 30 min interval
+
+```xml
+<!-- ~/Library/LaunchAgents/com.burk.{project}-qa-agent.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.burk.{project}-qa-agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/path/to/spawn-qa-agent.sh</string>
+    <string>{project}</string>
+    <string>{qa_script}</string>
+    <string>{api_base}</string>
+  </array>
+  <key>StartInterval</key><integer>1800</integer>  <!-- 30 min -->
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/Users/jonathan/.openclaw/workspace/reports/{project}-qa-agent.log</string>
+  <key>StandardErrorPath</key><string>/Users/jonathan/.openclaw/workspace/reports/{project}-qa-agent.log</string>
+</dict>
+</plist>
+```
+
+### QA Agent Status File
+
+The executor reads this to know if a QA agent is active:
+
+```json
+// ~/.openclaw/workspace/mahoodles-dashboard/data/{project}-qa-agent-status.json
+{
+  "last_run": "2026-04-16T20:30:00Z",
+  "rc": 0,
+  "project": "poem-of-the-day",
+  "checks_passed": ["api_health", "build", "home_screen", "browse_nav"],
+  "checks_failed": [],
+  "tickets_filed": []
+}
+```
+
+### Plane Ticket → Executor Workflow (The Loop)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  QA Agent (every 30 min)                                  │
+│    runs: qa_runner.py                                      │
+│    files: Plane bug tickets for failures                  │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+                      │ (tickets appear in Plane)
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│  GSD Executor (every 3 min)                              │
+│    STEP 4b: Pull Plane tickets for project                │
+│    → New QA ticket? → inject into STATE.md Blockers       │
+│    → Execute fix → commit → push                          │
+│    → Update ticket to resolved in Plane                   │
+│    → DM Discord: "Fixed QA ticket: [title]"              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Executor Plane Sync — How It Works
+
+1. **QA agent files bug** → Plane ticket created in `Backlog` state
+2. **Executor cycle (every 3 min)** → STEP 4b runs:
+   - Fetches all open issues from Plane project via API
+   - Compares against `known_tickets` in `qa-tickets.json`
+   - Any **new** ticket → written to STATE.md `## Blockers` as `QA-Reported Tickets`
+3. **Executor picks up ticket** → implements fix → commits with message referencing ticket ID
+4. **Post-fix** → executor marks ticket resolved in Plane:
+   ```bash
+   curl -sf -X PATCH \
+     "https://plane.burk-dashboards.com/api/v1/workspaces/mahoodles/projects/${PLANE_PROJECT_ID}/issues/${TID}/" \
+     -H "X-API-Key: ${PLANE_TOKEN}" \
+     -H "Content-Type: application/json" \
+     -d '{"state": "<resolved_state_id>"}'
+   ```
+5. **Discord DM**: "✅ Fixed QA ticket: [title] — [commit hash]"
+
+### Resolving Tickets from Executor
+
+After fixing a QA-reported ticket, the executor should:
+1. Mark the Plane issue as resolved (state → "Resolved" or equivalent)
+2. Remove it from STATE.md blockers list
+3. Update the qa-tickets.json tracker
+4. DM Discord confirming the fix
+
+The `qa-tickets.json` tracker prevents re-processing already-known tickets on subsequent cycles.
+
+### Quick Enable for a Project
+
+```bash
+# 1. Create QA agent spawn script
+cat > ~/Projects/{project}/scripts/qa/spawn-qa-agent.sh << 'EOF'
+#!/bin/bash
+# Copy the template from docs/qa-delivery-annex.md
+EOF
+chmod +x ~/Projects/{project}/scripts/qa/spawn-qa-agent.sh
+
+# 2. Install LaunchAgent (30 min)
+PLIST="$HOME/Library/LaunchAgents/com.burk.{project}-qa-agent.plist"
+cat > "$PLIST" << EOF
+<!-- see template above -->
+EOF
+launchctl load "$PLIST"
+
+# 3. Confirm executor has PLANE_PROJECT_ID set in its task
+# (update via setup.sh with --plane-project-id or edit the cron job manually)
+
+# 4. Verify:
+# - QA agent fires: tail -f ~/.openclaw/workspace/reports/{project}-qa-agent.log
+# - Executor syncs: tail -f ~/.openclaw/workspace/reports/{project}-gsd.lock (check for Plane ticket activity)
+```
+
+### Discord Alert for QA Failure (only on failure)
+
+Sent to 148191845040652288 when QA agent finds a problem — not on clean runs:
+
+```
+🧪 QA Alert — {project} ({time})
+━━━━━━━━━━━━━━━━━━
+Check failed: {check_name}
+Error: {error_detail}
+Ticket: {plane_ticket_url}
+Reporter: QA Agent (30min cycle)
+```
+
+Clean runs → no Discord noise. Failures → one DM with ticket link.

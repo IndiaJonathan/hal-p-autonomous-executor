@@ -261,6 +261,7 @@ fi
 if [ "$WITH_QA" = true ]; then
   echo ""
   echo "=== QA Setup ($QA_TYPE) ==="
+  PROJECT_DIR="$PROJECT_ROOT"
   QA_DIR="$PROJECT_ROOT/scripts/qa"
   mkdir -p "$QA_DIR"
 
@@ -351,10 +352,11 @@ PYEOF
   esac
 
   # Nightly orchestrator
-  cat > "$PROJECT_DIR/scripts/qa/nightly-qa-oracle.sh" << 'SHELLEOF'
+  NIGHTLY_SCRIPT="$QA_DIR/nightly-qa-oracle.sh"
+  cat > "$NIGHTLY_SCRIPT" << SHELLEOF
 #!/bin/bash
 set -euo pipefail
-PROJECT_DIR="{project_root}"
+PROJECT_DIR="$PROJECT_ROOT"
 SCRIPTS_DIR="$PROJECT_DIR/scripts/qa"
 REPORTS_DIR="/Users/jonathan/.openclaw/workspace/reports"
 LOG_FILE="$REPORTS_DIR/{project}-qa-oracle.log"
@@ -409,14 +411,17 @@ PLIST_EOF
 fi
 
 # ---- STEP 9: 30-min QA agent (periodic bug finder) ----
-cat >> "$PROJECT_DIR/scripts/qa/spawn-qa-agent.sh" << 'QAAGENTEOF'
+SPAWN_SCRIPT="$PROJECT_DIR/scripts/qa/spawn-qa-agent.sh"
+cat >> "$SPAWN_SCRIPT" << QAAGENTEOF
 #!/bin/bash
 set -euo pipefail
 PROJECT="{project}"
-QA_SCRIPT="$SCRIPTS_DIR/qa_runner.py"
-LOG_FILE="$REPORTS_DIR/{project}-qa-agent.log"
+PROJECT_DIR="$PROJECT_ROOT"
+SCRIPTS_DIR="\$PROJECT_DIR/scripts/qa"
+REPORTS_DIR="/Users/jonathan/.openclaw/workspace/reports"
+LOG_FILE="\$REPORTS_DIR/{project}-qa-agent.log"
 STATUS_FILE="/Users/jonathan/.openclaw/workspace/mahoodles-dashboard/data/{project}-qa-agent-status.json"
-LOCK_FILE="$REPORTS_DIR/{project}-qa-agent.lock"
+LOCK_FILE="\$REPORTS_DIR/{project}-qa-agent.lock"
 LOCK_TIMEOUT=1200
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }

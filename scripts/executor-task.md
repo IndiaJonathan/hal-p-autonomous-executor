@@ -189,6 +189,9 @@ TOTAL_PHASES=$(grep -c "^## Phase" "$ROADMAP_FILE" 2>/dev/null || echo "unknown"
 # git -C "$GIT_DIR" commit -m "feat: description $(date '+%Y-%m-%d %H:%M')"
 # git -C "$GIT_DIR" push
 
+# Docker prune — reclaim build cache after any image builds (prevents GBs of orphaned layers)
+docker system prune -f
+
 # Update STATE.md:
 # - Mark current phase
 # - Update last updated timestamp
